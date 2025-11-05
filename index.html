@@ -1,0 +1,730 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>탑뷰 전차 시뮬레이터</title>
+<style>
+  html,body{height:100%;margin:0;background:#111;color:#eee;font-family:Inter,system-ui,Arial;}
+  #ui {
+    position: absolute; left:12px; top:12px; z-index: 30;
+    background: rgba(0,0,0,0.35); padding:10px; border-radius:8px; backdrop-filter: blur(4px);
+    min-width:240px;
+  }
+  #canvasWrap{position:fixed;left:0;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;}
+  canvas{background:linear-gradient(#2b3,#123);border:3px solid #000;box-shadow:0 6px 30px rgba(0,0,0,0.7);}
+  .hud-row{display:flex;gap:8px;align-items:center;margin-bottom:6px;}
+  .bar{height:12px;background:rgba(255,255,255,0.08);border-radius:6px;overflow:hidden;flex:1}
+  .bar-inner{height:100%;background:linear-gradient(90deg,#f44,#fa4);width:50%}
+  .small{font-size:12px;color:#ddd}
+  #controls{position:fixed; right:12px; bottom:12px; z-index:40; background:rgba(0,0,0,0.35); padding:10px;border-radius:8px;}
+  #controls pre{margin:0;font-size:12px;line-height:1.4;color:#cfc}
+  #minimap { position: absolute; right:12px; top:12px; width:200px; height:200px; background:rgba(0,0,0,0.5); border-radius:8px; padding:6px; display:none; z-index:50;}
+</style>
+</head>
+<body>
+<div id="ui">
+  <div class="hud-row">
+    <div style="width:120px">HP</div>
+    <div class="bar"><div id="hpBar" class="bar-inner" style="width:100%"></div></div>
+    <div id="hpText" class="small" style="min-width:48px;text-align:right">100%</div>
+  </div>
+  <div class="hud-row">
+    <div style="width:120px">탄종</div>
+    <div id="ammoName" class="small">철갑탄 (1)</div>
+  </div>
+  <div class="hud-row">
+    <div style="width:120px">장전 상태</div>
+    <div class="small" id="reloadStatus">비장전</div>
+  </div>
+  <div class="hud-row">
+    <div style="width:120px">머신건 (W)</div>
+    <div id="mgStatus" class="small">준비</div>
+  </div>
+  미니맵: 누르고있기 Numpad8</div>
+</div>
+
+<div id="minimap"><canvas id="minimapCanvas" width="188" height="188"></canvas></div>
+
+<div id="canvasWrap">
+  <canvas id="game" width="1280" height="1280"></canvas>
+</div>
+
+<div id="controls">
+  <pre>
+    조작 설명
+Q: 좌측 궤도 전진
+E: 우측 궤도 전진
+A: 좌측 궤도 후진
+D: 우측 궤도 후진
+W: 차체 기관총
+S: 양측 궤도 브레이크
+Z: 좌측 궤도 브레이크
+C: 우측 궤도 브레이크
+Num 4: 포탑 역시계방향 회전
+Num 6: 포탑 시계방향 회전
+Num 5: 포탄 장전
+Num 1, 2, 3: 포탄 선택 (철갑탄, 고속탄, 작약탄)
+Num 8: 미니맵 확인
+Num 0: 포격
+  </pre>
+</div>
+
+<script>
+  // 🛰️ WebSocket 연결 및 상대방 상태
+let socket;
+let myId = null;
+let enemy = { x: 500, y: 500, angle: 0, turretAngle: 0, hp: 100 };
+
+// 연결 함수
+function connectServer() {
+  socket = new WebSocket("wss://side4.onrender.com"); // ← Render URL로 수정
+
+  socket.onopen = () => console.log("✅ 서버 연결 성공");
+  socket.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.type === 'init') {
+      myId = msg.id;
+      console.log("내 ID:", myId);
+    } else if (msg.type === 'state') {
+      Object.assign(enemy, msg.data);
+    }
+  };
+}
+connectServer();
+(() => {
+  // 🔊 사운드 파일 로드
+const sounds = {
+  fire: new Audio('fire.mp3'),
+  reload: new Audio('reload.mp3'),
+  brake: new Audio('brake.mp3'),
+  mg: new Audio('shot.mp3')
+};
+Object.values(sounds).forEach(s => {
+  s.volume = 0.5;
+  s.loop = false;
+});
+sounds.reload.loop = true;
+
+// 브라우저 자동재생 방지 회피용 — 최초 클릭 시 사운드 활성화
+window.addEventListener('click', () => {
+  Object.values(sounds).forEach(s => s.play().then(()=>s.pause()).catch(()=>{}));
+}, { once: true });
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const mmCanvas = document.getElementById('minimapCanvas');
+  const mmCtx = mmCanvas.getContext('2d');
+  const minimapEl = document.getElementById('minimap');
+
+  const W = canvas.width, H = canvas.height;
+
+  // State
+  const tank = {
+    x: W/2, y: H/2,
+    angle: 0, // hull angle (radians)
+    turretAngle: 0, // absolute angle (radians)
+    speedLeft: 0, speedRight: 0,
+    maxTrackSpeed: 50, // pixels/sec for full
+    trackAccel: 220, // px/sec^2
+    mass: 120, // for inertia effect (higher=slower responses)
+    hp: 100,
+  };
+
+  const muzzleFlashes = [];
+
+  // Camera / view
+  let cameraAngle = 0; // radians
+  let cameraX = 0, cameraY = 0; // we keep centered; can pan later
+
+  // Keys
+  const keys = {};
+  window.addEventListener('keydown', (e)=>{ keys[e.code]=true; e.preventDefault(); });
+  window.addEventListener('keyup', (e)=>{ keys[e.code]=false; e.preventDefault(); });
+
+  // Map & targets
+  const map = { w: 2000, h: 1500 };
+  const targets = [];
+  for (let i=0;i<8;i++){
+    targets.push({
+      x: 200 + Math.random()*(map.w-400),
+      y: 200 + Math.random()*(map.h-400),
+      hp: 100,
+      radius: 18 + Math.random()*14,
+      id: i+1,
+    });
+  }
+
+  // Ammo types
+  const AMMOS = {
+    AP: { name:'철갑탄(AP)', speed:700, damage:40, radius:4, explosive:false },
+    FAST: { name:'고속탄', speed:1100, damage:30, radius:3, explosive:false },
+    HE: { name:'작약탄(HE)', speed:550, damage:28, radius:10, explosive:true, splash:40, splashRadius:60 },
+  };
+
+  let selectedAmmoKey = 'AP';
+  let turretLoaded = false;
+  let reloadTimer = 0; // when >0, loading
+  const RELOAD_TIME = 7.0; // seconds
+
+  // Projectiles
+  const bullets = [];
+  const mgBursts = []; // for machinegun bullets (simple)
+
+  // Machine gun
+  let mgCooldown = 0;
+  const MG_RPM = 400; // rounds per minute approximate
+  const MG_INTERVAL = 60/MG_RPM; // seconds per round
+
+  // Time
+  let last = performance.now();
+
+  // Utility
+  function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+  function toRad(deg){ return deg*Math.PI/180; }
+  function toDeg(rad){ return rad*180/Math.PI; }
+  function angleTo(a,b){ let d = b - a; while(d>Math.PI) d-=Math.PI*2; while(d<-Math.PI) d+=Math.PI*2; return d; }
+
+  // Input: map user's requested keys to codes
+  // 사용자 키 매핑 (요청에 맞춤)
+  const keyMap = {
+      leftBrake: 'KeyC',   // ⬅ 좌측 궤도 브레이크
+  rightBrake: 'KeyZ',  // ➡ 우측 궤도 브레이크
+    leftTrackForward: 'KeyQ',   // q
+    rightTrackForward: 'KeyE',  // e
+    leftTrackBack: 'KeyA',      // a
+    rightTrackBack: 'KeyD',     // d
+    brake: 'KeyS',              // s
+    machineGun: 'KeyW',         // w
+
+    turretLeft: 'Numpad4',
+    turretRight: 'Numpad6',
+    turretLoad: 'Numpad5', // start reload
+    fire: 'Numpad0',
+
+    select1: 'Digit1', select2: 'Digit2', select3: 'Digit3',
+    nselect1: 'Numpad1', nselect2: 'Numpad2', nselect3: 'Numpad3',
+
+    camLeft: 'Numpad7',
+    camRight: 'Numpad9',
+    minimapHold: 'Numpad8'
+  };
+
+  // Accept both Numpad and top-row digits for ammo
+  function checkAmmoSelect(){
+    if (keys[keyMap.select1] || keys[keyMap.nselect1]) { selectedAmmoKey='AP'; turretLoaded=false; reloadTimer=0; }
+    if (keys[keyMap.select2] || keys[keyMap.nselect2]) { selectedAmmoKey='FAST'; turretLoaded=false; reloadTimer=0; }
+    if (keys[keyMap.select3] || keys[keyMap.nselect3]) { selectedAmmoKey='HE'; turretLoaded=false; reloadTimer=0; }
+  }
+
+  // Movement logic: convert track inputs to angular & linear velocity
+  function updateMovement(dt){
+    // target speeds from keys: -1/0/1
+    let leftTarget=0, rightTarget=0;
+    if (keys[keyMap.leftTrackForward]) leftTarget = 1;
+    if (keys[keyMap.leftTrackBack]) leftTarget = -1;
+    if (keys[keyMap.rightTrackForward]) rightTarget = 1;
+    if (keys[keyMap.rightTrackBack]) rightTarget = -1;
+    
+
+    // ---- 느린 가속(Ramp) 설정 ----
+    // rampTime: 목표(±1)까지 도달하는데 걸리는 초 (여기서 6.0초로 길게 설정)
+    const rampTime = 6.0; // 필요하면 8.0, 10.0 등으로 더 길게
+    // frame fraction: 이 프레임에서 목표치 쪽으로 얼마나 이동할지 비율
+    const frac = dt / Math.max(0.0001, rampTime);
+
+    // 부드럽게 보정 (exponential-like smoothing)
+    tank.speedLeft  += (leftTarget  - tank.speedLeft)  * frac;
+    tank.speedRight += (rightTarget - tank.speedRight) * frac;
+
+// ────────────────────────────────
+// 개별 궤도 브레이크 (좌 Z / 우 C / 전체 S)
+// ────────────────────────────────
+const brakeFrac = Math.min(1, dt * 8.0);
+
+if (keys[keyMap.leftBrake]) {
+  tank.speedLeft += (0 - tank.speedLeft) * brakeFrac;
+}
+if (keys[keyMap.rightBrake]) {
+  tank.speedRight += (0 - tank.speedRight) * brakeFrac;
+}
+if (keys[keyMap.brake]) { // S키 전체 브레이크
+  tank.speedLeft  += (0 - tank.speedLeft)  * brakeFrac;
+  tank.speedRight += (0 - tank.speedRight) * brakeFrac;
+}
+
+    // Convert differential tracks to motion:
+    // forward speed = average * maxTrackSpeed
+    const forward = (tank.speedLeft + tank.speedRight)/2 * tank.maxTrackSpeed;
+    // rotation rate = difference * factor
+    const rotRate = (tank.speedRight - tank.speedLeft) * 1.2; // rad/sec scale
+
+    // update position with simple physics
+    const dx = Math.cos(tank.angle) * forward * dt;
+    const dy = Math.sin(tank.angle) * forward * dt;
+    tank.x += dx;
+    tank.y += dy;
+    tank.angle += rotRate * dt * 1.2; // tweak for nice feel
+
+    // clamp within map
+    tank.x = clamp(tank.x, 20, map.w-20);
+    tank.y = clamp(tank.y, 20, map.h-20);
+  }
+
+  // turret rotate
+  function updateTurret(dt){
+    const turretSpeed = toRad(18); // deg/sec
+    if (keys[keyMap.turretLeft]) tank.turretAngle -= turretSpeed*dt;
+    if (keys[keyMap.turretRight]) tank.turretAngle += turretSpeed*dt;
+    // turret angle independent; keep within -PI..PI
+    while (tank.turretAngle > Math.PI) tank.turretAngle -= Math.PI*2;
+    while (tank.turretAngle < -Math.PI) tank.turretAngle += Math.PI*2;
+    // optional: turret slowly returns towards hull when idle? skipped for realism
+  }
+
+  // camera control
+  function updateCamera(dt){
+    // show minimap while Numpad8 held
+    minimapEl.style.display = keys[keyMap.minimapHold] ? 'block' : 'none';
+  }
+
+  // reload handling
+  function updateReload(dt){
+    if (reloadTimer > 0){
+      if (sounds.reload.paused) {
+      sounds.reload.currentTime = 0;
+      sounds.reload.play();
+    }
+
+    reloadTimer -= dt;
+    if (reloadTimer <= 0){
+      reloadTimer = 0;
+      turretLoaded = true;
+
+      // ✅ 장전 완료 → 루프 중지
+      sounds.reload.pause();
+      sounds.reload.currentTime = 0;
+    }
+    }
+  }
+
+  // Machine gun
+  function updateMG(dt){
+    if (mgCooldown > 0) mgCooldown = Math.max(0, mgCooldown - dt);
+    if (keys[keyMap.machineGun] && mgCooldown === 0){
+      mgCooldown = MG_INTERVAL;
+      sounds.mg.currentTime = 0;
+    sounds.mg.play();
+      // spawn a machinegun bullet
+      const px = tank.x + Math.cos(tank.angle)*34;
+      const py = tank.y + Math.sin(tank.angle)*34;
+      bullets.push({ x: px, y: py, vx: Math.cos(tank.angle)*1200, vy: Math.sin(tank.angle)*1200,
+        life: 1.2, dmg: 0.5, r:2, from:'mg' });
+    }
+  }
+
+  // fire turret shell
+ function tryFireTurret(){
+  if (!turretLoaded) return; // 장전 안 되어 있으면 아무 반응 X
+  turretLoaded = false;
+
+  // ✅ 실제 발사 시점에만 사운드 재생
+  sounds.fire.currentTime = 0;
+  sounds.fire.play();
+    // create projectile with AMMO properties
+    const info = AMMOS[selectedAmmoKey];
+    const speed = info.speed;
+    const px = tank.x + Math.cos(tank.turretAngle)*36;
+    const py = tank.y + Math.sin(tank.turretAngle)*36;
+    bullets.push({
+      x: px, y: py,
+      vx: Math.cos(tank.turretAngle)*speed,
+      vy: Math.sin(tank.turretAngle)*speed,
+      life: 6,
+      dmg: info.damage,
+      r: info.radius,
+      explosive: info.explosive,
+      splash: info.splash || 0,
+      splashRadius: info.splashRadius || 0,
+      type: selectedAmmoKey
+    });
+    // ✅ muzzle flash 생성
+muzzleFlashes.push({
+  x: px,
+  y: py,
+  r: info.radius * 3,
+  life: 0.2,
+  alpha: 1.0
+});
+  }
+
+  // update bullets and collisions
+  function updateMuzzle(dt){
+  for (let i = muzzleFlashes.length - 1; i >= 0; i--){
+    const m = muzzleFlashes[i];
+    m.life -= dt;
+    m.alpha = m.life / 0.2;
+    if (m.life <= 0) muzzleFlashes.splice(i,1);
+  }
+}
+function updateBullets(dt){
+  for (let i=bullets.length-1;i>=0;i--){
+    const b = bullets[i];
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    b.life -= dt;
+    if (b.life <= 0 || b.x < -50 || b.x > map.w+50 || b.y < -50 || b.y > map.h+50){
+      bullets.splice(i,1);
+      continue;
+    }
+    // 충돌 처리
+    for (let j=targets.length-1;j>=0;j--){
+      const t = targets[j];
+      const dx = b.x - t.x, dy = b.y - t.y;
+      const dist = Math.hypot(dx,dy);
+      if (dist < (b.r + t.radius)){
+        if (b.explosive){
+          for (let k=0;k<targets.length;k++){
+            const tt = targets[k];
+            const d2 = Math.hypot(b.x-tt.x,b.y-tt.y);
+            if (d2 <= b.splashRadius){
+              const ratio = 1 - d2 / b.splashRadius;
+              const dmg = Math.round((b.splash) * ratio);
+              tt.hp -= dmg;
+            }
+          }
+        } else {
+          t.hp -= b.dmg;
+        }
+        bullets.splice(i,1);
+        break;
+      }
+    }
+  }
+  // 죽은 타겟 제거
+  for (let i=targets.length-1;i>=0;i--){
+    if (targets[i].hp <= 0) targets.splice(i,1);
+  }
+}
+
+  // Drawing
+  function worldToScreen(x,y){
+    // world coordinates to canvas coords with camera centered on tank and rotated by cameraAngle
+    const cx = canvas.width/2;
+    const cy = canvas.height/2;
+    const dx = x - tank.x;
+    const dy = y - tank.y;
+    // rotate by -cameraAngle (camera rotates view)
+    const cosa = Math.cos(-cameraAngle), sina = Math.sin(-cameraAngle);
+    const rx = dx*cosa - dy*sina;
+    const ry = dx*sina + dy*cosa;
+    return { x: cx + rx, y: cy + ry };
+  }
+
+  function draw(){
+    // clear
+    ctx.fillStyle = '#263'; ctx.fillRect(0,0,W,H);
+
+    // draw grid for map (simple)
+    ctx.save();
+    // translate so that tank is at center, then rotate by camera
+    ctx.translate(W/2, H/2);
+    ctx.rotate(cameraAngle);
+    ctx.translate(-tank.x, -tank.y);
+
+    // background ground
+    const tile = 120;
+    ctx.fillStyle = 'rgba(45,60,40,0.8)';
+    ctx.fillRect(tank.x - W/2 - 200, tank.y - H/2 - 200, W + 400, H + 400);
+
+    // draw some scenery (rocks / boxes)
+    ctx.fillStyle = '#4a3';
+    for (let gx = 0; gx < map.w; gx += 300){
+      for (let gy = 0; gy < map.h; gy += 300){
+        ctx.beginPath();
+        ctx.ellipse(gx+30, gy+20, 26, 14, 0, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+
+    // draw targets
+    for (const t of targets){
+      ctx.save();
+      ctx.translate(t.x, t.y);
+      // target body
+      ctx.fillStyle = 'rgba(180,40,40,0.95)';
+      ctx.beginPath();
+      ctx.arc(0,0,t.radius,0,Math.PI*2);
+      ctx.fill();
+      // hp bar
+      const hpPerc = Math.max(0,t.hp)/100;
+      ctx.fillStyle = '#222'; ctx.fillRect(-t.radius, -t.radius-10, t.radius*2, 6);
+      ctx.fillStyle = '#4f4'; ctx.fillRect(-t.radius, -t.radius-10, t.radius*2 * Math.max(0,Math.min(1,t.hp/100)), 6);
+      ctx.restore();
+    }
+    for (const m of muzzleFlashes){
+  ctx.save();
+  ctx.globalAlpha = m.alpha;
+  ctx.fillStyle = 'rgba(255,230,150,1)';
+  ctx.beginPath();
+  ctx.arc(m.x, m.y, m.r, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+}
+
+    // draw bullets
+    for (const b of bullets){
+      ctx.fillStyle = (b.type === 'HE') ? 'orange' : (b.from==='mg' ? '#ffd' : '#ccc');
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
+      ctx.fill();
+      // simple trail
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.beginPath();
+      ctx.moveTo(b.x - b.vx*0.03, b.y - b.vy*0.03);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+
+    // draw tank hull
+    ctx.save();
+    ctx.translate(tank.x, tank.y);
+    ctx.rotate(tank.angle);
+    // hull body
+    ctx.fillStyle = '#3a5';
+    ctx.fillRect(-28, -18, 56, 36);
+    // tracks
+ctx.fillStyle = '#222';
+ctx.fillRect(-28, -26, 56, 8);  // 위쪽 궤도
+ctx.fillRect(-28, 18, 56, 8); 
+    // turret base
+    ctx.fillStyle = '#476';
+    ctx.beginPath();
+    ctx.ellipse(0,0,20,18,0,0,Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+
+    // draw turret (independent rotation) - in world coords
+    ctx.save();
+    ctx.translate(tank.x, tank.y);
+    ctx.rotate(tank.turretAngle);
+    // turret barrel
+    ctx.fillStyle = '#2b3';
+    ctx.fillRect(0, -3, 42, 6);
+    // turret ring
+    ctx.fillStyle = '#394';
+    ctx.beginPath(); ctx.arc(0,0,12,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+
+    ctx.strokeStyle = 'red';
+ctx.lineWidth = 4;
+ctx.strokeRect(0, 0, map.w, map.h);
+
+// 🔵 상대 탱크 그리기
+ctx.save();
+ctx.translate(enemy.x, enemy.y);
+ctx.rotate(enemy.angle);
+ctx.fillStyle = '#338'; // 파란 탱크
+ctx.fillRect(-28, -18, 56, 36);
+ctx.fillStyle = '#111';
+ctx.fillRect(-28, -26, 56, 8);
+ctx.fillRect(-28, 18, 56, 8);
+ctx.fillStyle = '#557';
+ctx.beginPath();
+ctx.ellipse(0, 0, 20, 18, 0, 0, Math.PI*2);
+ctx.fill();
+// turret
+ctx.rotate(enemy.turretAngle - enemy.angle);
+ctx.fillStyle = '#445';
+ctx.fillRect(0, -3, 42, 6);
+ctx.fill();
+ctx.restore();
+
+    ctx.restore(); // end of camera transforms
+
+    // draw crosshair direction (fixed alignment with turret)
+ctx.save();
+ctx.translate(canvas.width / 2, canvas.height / 2);
+ctx.rotate(tank.turretAngle - cameraAngle); // 포탑 각도에서 카메라 회전값 보정
+ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+ctx.beginPath();
+ctx.moveTo(0, 0);
+ctx.lineTo(60, 0); // 포탑 정면 방향으로 선
+ctx.stroke();
+ctx.restore();
+
+function drawDamageEffect(tank) {
+  if (tank.hp > 75) return;
+  const level = tank.hp > 50 ? 1 : tank.hp > 25 ? 2 : 3;
+  for (let i = 0; i < level * 3; i++) {
+    const px = tank.x + (Math.random() - 0.5) * 20;
+    const py = tank.y - 10 - Math.random() * 15;
+    ctx.globalAlpha = 0.3 + Math.random() * 0.3;
+    ctx.fillStyle = level === 3 ? 'orange' : 'gray';
+    ctx.beginPath();
+    ctx.arc(px, py, 5 + Math.random() * 8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Draw reload progress bar (위쪽 게이지)
+if (reloadTimer > 0) {
+  const progress = 1 - (reloadTimer / RELOAD_TIME);
+  const barWidth = 300;
+  const barHeight = 12;
+  const x = (canvas.width - barWidth) / 2;
+  const y = 30;
+
+  // 배경
+  ctx.fillStyle = "rgba(255,255,255,0.15)";
+  ctx.fillRect(x, y, barWidth, barHeight);
+
+  // 진행 부분
+  ctx.fillStyle = "lime";
+  ctx.fillRect(x, y, barWidth * progress, barHeight);
+
+  // 테두리
+  ctx.strokeStyle = "rgba(255,255,255,0.4)";
+  ctx.strokeRect(x, y, barWidth, barHeight);
+}
+
+    // HUD: draw simple cross/aim reticle at center
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.beginPath();
+    ctx.arc(canvas.width/2, canvas.height/2, 28, 0, Math.PI*2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(canvas.width/2 - 6, canvas.height/2); ctx.lineTo(canvas.width/2 + 6, canvas.height/2);
+    ctx.moveTo(canvas.width/2, canvas.height/2 - 6); ctx.lineTo(canvas.width/2, canvas.height/2 + 6);
+    ctx.stroke();
+
+    // draw small text info
+    ctx.fillStyle = '#fff';
+    ctx.font = '12px sans-serif';
+    ctx.fillText('위치: ' + Math.round(tank.x) + ',' + Math.round(tank.y), 12, H - 12);
+    ctx.fillText('포탑 앵글: ' + Math.round(toDeg(tank.turretAngle)) + '°', 160, H - 12);
+  }
+
+  // Draw minimapssss
+  function drawMinimap(){
+    mmCtx.clearRect(0,0,mmCanvas.width,mmCanvas.height);
+    mmCtx.fillStyle = '#041'; mmCtx.fillRect(0,0,mmCanvas.width,mmCanvas.height);
+    // map scale
+    const pad = 6;
+    const sx = (mmCanvas.width-2*pad)/map.w;
+    const sy = (mmCanvas.height-2*pad)/map.h;
+    const s = Math.min(sx,sy);
+    // draw targets
+    for (const t of targets){
+      mmCtx.fillStyle = '#f55';
+      mmCtx.beginPath();
+      mmCtx.arc(pad + t.x * s, pad + t.y * s, Math.max(2, t.radius * s), 0, Math.PI*2);
+      mmCtx.fill();
+    }
+    // draw tank
+    mmCtx.save();
+    mmCtx.translate(pad + tank.x*s, pad + tank.y*s);
+    mmCtx.rotate(tank.angle - cameraAngle); // show heading relative to view
+    mmCtx.fillStyle = '#6f6';
+    mmCtx.fillRect(-6,-4,12,8);
+    mmCtx.restore();
+
+    drawDamageEffect(tank);   // 내 탱크 연기/불
+drawDamageEffect(enemy);
+  }
+
+  // UI updates
+  const hpBar = document.getElementById('hpBar');
+  const hpText = document.getElementById('hpText');
+  const ammoNameEl = document.getElementById('ammoName');
+  const reloadStatusEl = document.getElementById('reloadStatus');
+  const mgStatusEl = document.getElementById('mgStatus');
+
+  function updateUI(dt){
+    hpBar.style.width = (tank.hp/100*100) + '%';
+    hpText.textContent = Math.max(0, Math.round(tank.hp)) + '%';
+    ammoNameEl.textContent = AMMOS[selectedAmmoKey].name + ' (' + (selectedAmmoKey==='AP'?'1': selectedAmmoKey==='FAST'?'2':'3') + ')';
+    if (reloadTimer > 0) {
+      reloadStatusEl.textContent = '장전중: ' + reloadTimer.toFixed(1) + 's';
+    } else if (turretLoaded) {
+      reloadStatusEl.textContent = '완료 (발사 대기)';
+    } else {
+      reloadStatusEl.textContent = '비장전 (Numpad5로 장전)';
+    }
+    if (mgCooldown > 0) mgStatusEl.textContent = '재장전 대기: ' + mgCooldown.toFixed(2) + 's';
+    else mgStatusEl.textContent = '준비';
+  }
+
+  // Controls: pressing Numpad5 starts reload (7s)
+  window.addEventListener('keydown', (e)=>{
+    // avoid repeating when key is held (use .code check)
+    if (e.code === keyMap.turretLoad && reloadTimer <= 0 && !turretLoaded){
+      reloadTimer = RELOAD_TIME;
+      sounds.reload.currentTime = 0;
+  sounds.reload.play();
+    }
+    if (e.code === keyMap.fire){
+      // spacebar fired
+      tryFireTurret();
+    }
+    // ammo selection via either digit or numpad digits handled each frame
+  });
+
+  // Very simple AI: targets slowly move randomly (optional)
+  function updateTargets(dt){
+    for (const t of targets){
+      t.x += (Math.sin(t.id + performance.now()*0.0002) * 10) * dt;
+      t.y += (Math.cos(t.id + performance.now()*0.00017) * 8) * dt;
+      t.x = clamp(t.x, 10, map.w-10);
+      t.y = clamp(t.y, 10, map.h-10);
+    }
+  }
+
+  // Main loop
+  function frame(now){
+    const dt = Math.min(0.04, (now - last) / 1000);
+    last = now;
+
+    updateMuzzle(dt);
+    checkAmmoSelect();
+    updateMovement(dt);
+    updateTurret(dt);
+    updateCamera(dt);
+    updateReload(dt);
+    updateMG(dt);
+    updateBullets(dt);
+    updateTargets(dt);
+
+    // 🔁 내 상태를 서버로 전송
+if (socket && socket.readyState === 1 && myId) {
+  socket.send(JSON.stringify({
+    type: 'state',
+    data: {
+      x: tank.x, y: tank.y,
+      angle: tank.angle,
+      turretAngle: tank.turretAngle,
+      hp: tank.hp
+    }
+  }));
+}
+
+    updateUI(dt);
+    draw();
+    drawMinimap();
+
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // Instructions: click canvas to focus
+  canvas.addEventListener('click', ()=>canvas.focus());
+
+  // helpful: allow WASD alternative for tracks? (not requested) - not added to keep faithful
+
+  // initial message in console for debugging
+  console.log('탑뷰 전차 시뮬레이터 로드됨 — 키를 눌러 조작하세요.');
+
+})();
+</script>
+</body>
+</html>
