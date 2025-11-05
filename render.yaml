@@ -1,10 +1,12 @@
 services:
   - type: web
-    name: tank-duel
+    name: tank-duel-server
     env: node
     plan: free
-    buildCommand: ""
-    startCommand: "node server.js"
+    buildCommand: npm install
+    startCommand: npm start
     envVars:
-      - key: NODE_VERSION
-        value: 22
+      - key: PORT
+        value: "8080"
+    branches:
+      - main
