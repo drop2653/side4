@@ -145,7 +145,6 @@ window.addEventListener('click', () => {
   window.addEventListener('keyup', (e)=>{ keys[e.code]=false; e.preventDefault(); });
 
   // Map & targets
-  const map = { w: 2000, h: 1500 };
   const targets = [];
 for (let i = 0; i < 8; i++) {
   targets.push({
@@ -731,5 +730,6 @@ if (socket && socket.readyState === 1 && myId) {
 </script>
 </body>
 </html>
+
 
 
