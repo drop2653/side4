@@ -82,14 +82,29 @@ function connectServer() {
 
   socket.onopen = () => console.log("✅ 서버 연결 성공");
   socket.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
-    if (msg.type === 'init') {
-      myId = msg.id;
-      console.log("내 ID:", myId);
-    } else if (msg.type === 'state') {
-      Object.assign(enemy, msg.data);
+  const msg = JSON.parse(event.data);
+  
+  if (msg.type === 'init') {
+    myId = msg.id;
+    console.log("내 ID:", myId);
+    
+    // 탱크 색상과 스폰 위치 설정
+    if (myId === 'RED') {
+      // 빨강 탱크: 왼쪽에 스폰
+      tank.x = 200;
+      tank.y = 750;
+      tank.color = '#d33'; // 빨강
+    } else if (myId === 'BLUE') {
+      // 파랑 탱크: 오른쪽에 스폰
+      tank.x = 1800;
+      tank.y = 750;
+      tank.color = '#33f'; // 파랑
     }
-  };
+  } else if (msg.type === 'state') {
+    // 상대방 상태 업데이트
+    Object.assign(enemy, msg.data);
+  }
+};
 };
 (() => {
   // 🔊 사운드 파일 로드
@@ -604,27 +619,39 @@ if (reloadTimer > 0) {
 
   // Draw minimapssss
   function drawMinimap(){
-    mmCtx.clearRect(0,0,mmCanvas.width,mmCanvas.height);
-    mmCtx.fillStyle = '#041'; mmCtx.fillRect(0,0,mmCanvas.width,mmCanvas.height);
-    // map scale
-    const pad = 6;
-    const sx = (mmCanvas.width-2*pad)/map.w;
-    const sy = (mmCanvas.height-2*pad)/map.h;
-    const s = Math.min(sx,sy);
-    // draw targets
-    for (const t of targets){
-      mmCtx.fillStyle = '#f55';
-      mmCtx.beginPath();
-      mmCtx.arc(pad + t.x * s, pad + t.y * s, Math.max(2, t.radius * s), 0, Math.PI*2);
-      mmCtx.fill();
-    }
-    // draw tank
-    mmCtx.save();
-    mmCtx.translate(pad + tank.x*s, pad + tank.y*s);
-    mmCtx.rotate(tank.angle - cameraAngle); // show heading relative to view
-    mmCtx.fillStyle = '#6f6';
-    mmCtx.fillRect(-6,-4,12,8);
-    mmCtx.restore();
+    mmCtx.clearRect(0, 0, mmCanvas.width, mmCanvas.height);
+  mmCtx.fillStyle = '#041';
+  mmCtx.fillRect(0, 0, mmCanvas.width, mmCanvas.height);
+
+  // 지도 스케일 계산
+  const pad = 6;
+  const sx = (mmCanvas.width - 2 * pad) / map.w;
+  const sy = (mmCanvas.height - 2 * pad) / map.h;
+  const s = Math.min(sx, sy);
+
+  // 타겟 그리기
+  for (const t of targets) {
+    mmCtx.fillStyle = '#f55';
+    mmCtx.beginPath();
+    mmCtx.arc(pad + t.x * s, pad + t.y * s, Math.max(2, t.radius * s), 0, Math.PI * 2);
+    mmCtx.fill();
+  }
+
+  // 내 탱크 그리기
+  mmCtx.save();
+  mmCtx.translate(pad + tank.x * s, pad + tank.y * s);
+  mmCtx.rotate(tank.angle - cameraAngle); // 회전값 보정
+  mmCtx.fillStyle = '#6f6';  // 내 탱크 색상
+  mmCtx.fillRect(-6, -4, 12, 8);
+  mmCtx.restore();
+
+  // 상대 탱크 그리기
+  mmCtx.save();
+  mmCtx.translate(pad + enemy.x * s, pad + enemy.y * s);
+  mmCtx.rotate(enemy.angle - cameraAngle); // 회전값 보정
+  mmCtx.fillStyle = '#338';  // 상대 탱크 색상
+  mmCtx.fillRect(-6, -4, 12, 8);
+  mmCtx.restore();
 
     drawDamageEffect(tank);   // 내 탱크 연기/불
 drawDamageEffect(enemy);
@@ -727,6 +754,7 @@ if (socket && socket.readyState === 1 && myId) {
 </script>
 </body>
 </html>
+
 
 
 
