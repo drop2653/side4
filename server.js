@@ -5,14 +5,21 @@ import { WebSocketServer } from "ws";
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+// ✅ 현재 파일 경로 계산 (ESM 환경용)
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// ✅ index.html 등 정적 파일 서빙
+app.use(express.static(__dirname));
+
 // ✅ Express HTTP 서버 생성
 const server = createServer(app);
 
 // ✅ WebSocket 서버를 HTTP 위에 얹기
 const wss = new WebSocketServer({ server });
 
+// ✅ 기본 경로에 index3.html 표시 (선택사항)
 app.get("/", (req, res) => {
-  res.send("✅ Tank Duel WebSocket Server running");
+  res.sendFile(path.join(__dirname, "index3.html"));
 });
 
 // ✅ 룸 관리
@@ -33,7 +40,6 @@ wss.on("connection", (ws) => {
       }
     }
   });
-
   ws.on("close", () => {
     console.log("❌ 연결 종료");
     rooms[roomId] = rooms[roomId].filter((c) => c !== ws);
@@ -44,3 +50,4 @@ wss.on("connection", (ws) => {
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
+
