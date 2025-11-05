@@ -110,6 +110,7 @@ sounds.reload.loop = true;
 window.addEventListener('click', () => {
   Object.values(sounds).forEach(s => s.play().then(()=>s.pause()).catch(()=>{}));
 }, { once: true });
+
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d', { alpha: false });
   const mmCanvas = document.getElementById('minimapCanvas');
@@ -118,6 +119,7 @@ window.addEventListener('click', () => {
 
   const W = canvas.width, H = canvas.height;
 
+  const map = { w: 2000, h: 1500 };
   // State
   const tank = {
   x: map.w * 0.25,
@@ -729,4 +731,5 @@ if (socket && socket.readyState === 1 && myId) {
 </script>
 </body>
 </html>
+
 
