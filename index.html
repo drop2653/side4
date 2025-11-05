@@ -120,15 +120,16 @@ window.addEventListener('click', () => {
 
   // State
   const tank = {
-    x: W/2, y: H/2,
-    angle: 0, // hull angle (radians)
-    turretAngle: 0, // absolute angle (radians)
-    speedLeft: 0, speedRight: 0,
-    maxTrackSpeed: 50, // pixels/sec for full
-    trackAccel: 220, // px/sec^2
-    mass: 120, // for inertia effect (higher=slower responses)
-    hp: 100,
-  };
+  x: map.w * 0.25,
+  y: map.h * 0.5,
+  angle: 0,
+  turretAngle: 0,
+  speedLeft: 0, speedRight: 0,
+  maxTrackSpeed: 50,
+  trackAccel: 220,
+  mass: 120,
+  hp: 100,
+};
 
   const muzzleFlashes = [];
 
@@ -144,14 +145,14 @@ window.addEventListener('click', () => {
   // Map & targets
   const map = { w: 2000, h: 1500 };
   const targets = [];
-  for (let i=0;i<8;i++){
-    targets.push({
-      x: 200 + Math.random()*(map.w-400),
-      y: 200 + Math.random()*(map.h-400),
-      hp: 100,
-      radius: 18 + Math.random()*14,
-      id: i+1,
-    });
+for (let i = 0; i < 8; i++) {
+  targets.push({
+    x: map.w * 0.75 + Math.random() * 100 - 50, // 오른쪽 영역
+    y: map.h * 0.5 + Math.random() * 200 - 100,
+    hp: 80 + Math.floor(Math.random() * 20),
+    radius: 20 + Math.random() * 10,
+    id: i + 1,
+  });
   }
 
   // Ammo types
@@ -728,3 +729,4 @@ if (socket && socket.readyState === 1 && myId) {
 </script>
 </body>
 </html>
+
