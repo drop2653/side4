@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 10000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ✅ index3.html 및 정적 파일 서빙
+// ✅ index.html 및 정적 파일 서빙
 app.use(express.static(__dirname));
 
 // ✅ Express HTTP 서버 생성
@@ -20,9 +20,9 @@ const server = createServer(app);
 // ✅ WebSocket 서버를 HTTP 위에 얹기
 const wss = new WebSocketServer({ server });
 
-// ✅ 기본 경로에 index3.html 표시
+// ✅ 기본 경로에 index.html 표시
 app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "index3.html"));
+  res.sendFile(path.join(__dirname, "index.html"));
 });
 
 // ✅ 룸 관리
@@ -56,5 +56,6 @@ wss.on("connection", (ws) => {
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
+
 
 
