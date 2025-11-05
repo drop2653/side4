@@ -90,8 +90,7 @@ function connectServer() {
       Object.assign(enemy, msg.data);
     }
   };
-}
-connectServer();
+};
 (() => {
   // 🔊 사운드 파일 로드
 const sounds = {
@@ -109,7 +108,6 @@ sounds.reload.loop = true;
 window.addEventListener('click', () => {
   Object.values(sounds).forEach(s => s.play().then(()=>s.pause()).catch(()=>{}));
 }, { once: true });
-
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d', { alpha: false });
   const mmCanvas = document.getElementById('minimapCanvas');
@@ -118,19 +116,17 @@ window.addEventListener('click', () => {
 
   const W = canvas.width, H = canvas.height;
 
-  const map = { w: 2000, h: 1500 };
   // State
   const tank = {
-  x: map.w * 0.25,
-  y: map.h * 0.5,
-  angle: 0,
-  turretAngle: 0,
-  speedLeft: 0, speedRight: 0,
-  maxTrackSpeed: 50,
-  trackAccel: 220,
-  mass: 120,
-  hp: 100,
-};
+    x: W/2, y: H/2,
+    angle: 0, // hull angle (radians)
+    turretAngle: 0, // absolute angle (radians)
+    speedLeft: 0, speedRight: 0,
+    maxTrackSpeed: 50, // pixels/sec for full
+    trackAccel: 220, // px/sec^2
+    mass: 120, // for inertia effect (higher=slower responses)
+    hp: 100,
+  };
 
   const muzzleFlashes = [];
 
@@ -140,19 +136,20 @@ window.addEventListener('click', () => {
 
   // Keys
   const keys = {};
-  window.addEventListener('keydown', (e)=>{ keys[e.code]=true; e.preventDefault(); });
-  window.addEventListener('keyup', (e)=>{ keys[e.code]=false; e.preventDefault(); });
+  window.addEventListener('keydown', (e)=>{ keys[e.code]=true; });
+window.addEventListener('keyup', (e)=>{ keys[e.code]=false; });
 
   // Map & targets
+  const map = { w: 2000, h: 1500 };
   const targets = [];
-for (let i = 0; i < 8; i++) {
-  targets.push({
-    x: map.w * 0.75 + Math.random() * 100 - 50, // 오른쪽 영역
-    y: map.h * 0.5 + Math.random() * 200 - 100,
-    hp: 80 + Math.floor(Math.random() * 20),
-    radius: 20 + Math.random() * 10,
-    id: i + 1,
-  });
+  for (let i=0;i<8;i++){
+    targets.push({
+      x: 200 + Math.random()*(map.w-400),
+      y: 200 + Math.random()*(map.h-400),
+      hp: 100,
+      radius: 18 + Math.random()*14,
+      id: i+1,
+    });
   }
 
   // Ammo types
@@ -553,21 +550,6 @@ ctx.lineTo(60, 0); // 포탑 정면 방향으로 선
 ctx.stroke();
 ctx.restore();
 
-function drawDamageEffect(tank) {
-  if (tank.hp > 75) return;
-  const level = tank.hp > 50 ? 1 : tank.hp > 25 ? 2 : 3;
-  for (let i = 0; i < level * 3; i++) {
-    const px = tank.x + (Math.random() - 0.5) * 20;
-    const py = tank.y - 10 - Math.random() * 15;
-    ctx.globalAlpha = 0.3 + Math.random() * 0.3;
-    ctx.fillStyle = level === 3 ? 'orange' : 'gray';
-    ctx.beginPath();
-    ctx.arc(px, py, 5 + Math.random() * 8, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.globalAlpha = 1;
-}
-
 // Draw reload progress bar (위쪽 게이지)
 if (reloadTimer > 0) {
   const progress = 1 - (reloadTimer / RELOAD_TIME);
@@ -605,6 +587,20 @@ if (reloadTimer > 0) {
     ctx.fillText('위치: ' + Math.round(tank.x) + ',' + Math.round(tank.y), 12, H - 12);
     ctx.fillText('포탑 앵글: ' + Math.round(toDeg(tank.turretAngle)) + '°', 160, H - 12);
   }
+  function drawDamageEffect(tank) {
+  if (tank.hp > 75) return;
+  const level = tank.hp > 50 ? 1 : tank.hp > 25 ? 2 : 3;
+  for (let i = 0; i < level * 3; i++) {
+    const px = tank.x + (Math.random() - 0.5) * 20;
+    const py = tank.y - 10 - Math.random() * 15;
+    ctx.globalAlpha = 0.3 + Math.random() * 0.3;
+    ctx.fillStyle = level === 3 ? 'orange' : 'gray';
+    ctx.beginPath();
+    ctx.arc(px, py, 5 + Math.random() * 8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
 
   // Draw minimapssss
   function drawMinimap(){
@@ -712,9 +708,11 @@ if (socket && socket.readyState === 1 && myId) {
     updateUI(dt);
     draw();
     drawMinimap();
-
     requestAnimationFrame(frame);
   }
+
+  // 🔁 루프 정의 끝나고 딱 한 번만 서버 연결
+  connectServer();
   requestAnimationFrame(frame);
 
   // Instructions: click canvas to focus
@@ -729,6 +727,7 @@ if (socket && socket.readyState === 1 && myId) {
 </script>
 </body>
 </html>
+
 
 
 
