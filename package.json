@@ -1,11 +1,13 @@
 {
-  "name": "tank-duel",
+  "name": "tank-duel-server",
   "version": "1.0.0",
   "main": "server.js",
+  "type": "module",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "ws": "^8.17.0"
+    "ws": "^8.17.0",
+    "express": "^4.19.2"
   }
 }
