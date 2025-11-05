@@ -97,7 +97,6 @@ connectServer();
 const sounds = {
   fire: new Audio('fire.mp3'),
   reload: new Audio('reload.mp3'),
-  brake: new Audio('brake.mp3'),
   mg: new Audio('shot.mp3')
 };
 Object.values(sounds).forEach(s => {
@@ -730,6 +729,7 @@ if (socket && socket.readyState === 1 && myId) {
 </script>
 </body>
 </html>
+
 
 
 
